@@ -53,49 +53,113 @@ class Manual_Subscription_Manager {
     }
     
     // Admin page for managing subscriptions
-    public function admin_subscriptions_page() {
-        global $wpdb;
-        $subscriptions = $wpdb->get_results( "SELECT * FROM {$this->table_name} ORDER BY id DESC" );
-        ?>
-        <div class="wrap">
-            <h1>Subscription Requests</h1>
-            <table class="wp-list-table widefat fixed striped">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>User</th>
-                        <th>Package</th>
-                        <th>Start Date</th>
-                        <th>Expiry Date</th>
-                        <th>Approved</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <?php foreach ( $subscriptions as $sub ) : 
-                    $user = get_userdata( $sub->user_id );
-                ?>
-                    <tr>
-                        <td><?php echo esc_html( $sub->id ); ?></td>
-                        <td><?php echo esc_html( $user ? $user->display_name : 'Unknown' ); ?></td>
-                        <td><?php echo esc_html( $sub->package ); ?></td>
-                        <td><?php echo esc_html( $sub->start_date ); ?></td>
-                        <td><?php echo esc_html( $sub->expiry_date ); ?></td>
-                        <td><?php echo $sub->approved ? 'Yes' : 'No'; ?></td>
-                        <td>
-                            <?php if ( ! $sub->approved ) : ?>
-                                <a href="<?php echo admin_url( 'admin-post.php?action=msm_approve_subscription&id=' . $sub->id ); ?>">Approve</a>
-                            <?php else : ?>
-                                -
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-        <?php
+   // Admin page for managing subscriptions (Updated with "Add Subscription" form)
+public function admin_subscriptions_page() {
+    global $wpdb;
+
+    // Process form submission
+    if (isset($_POST['msm_add_subscription'])) {
+        $user_id = intval($_POST['user_id']);
+        $package = sanitize_text_field($_POST['package']);
+        $now = current_time('mysql');
+        $expiry = date('Y-m-d H:i:s', strtotime('+30 days', current_time('timestamp')));
+
+        // Check if the user already has an active subscription
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$this->table_name} WHERE user_id = %d AND approved = 1 AND expiry_date > %s",
+            $user_id, $now
+        ));
+
+        if ($existing) {
+            echo '<div class="notice notice-error"><p>This user already has an active subscription.</p></div>';
+        } else {
+            // Insert subscription
+            $wpdb->insert($this->table_name, [
+                'user_id' => $user_id,
+                'package' => $package,
+                'start_date' => $now,
+                'expiry_date' => $expiry,
+                'approved' => 1
+            ]);
+
+            // Send email to user
+            $user = get_userdata($user_id);
+            if ($user) {
+                wp_mail($user->user_email, 'Subscription Approved', "Your subscription has been added and is active until $expiry.");
+            }
+
+            echo '<div class="notice notice-success"><p>Subscription added successfully!</p></div>';
+        }
     }
+
+    // Fetch existing subscriptions
+    $subscriptions = $wpdb->get_results("SELECT * FROM {$this->table_name} ORDER BY id DESC");
+    $users = get_users(['role__in' => ['subscriber', 'customer', 'contributor', 'author', 'editor', 'administrator']]); // Fetch users
+
+    ?>
+    <div class="wrap">
+        <h1>Manage Subscriptions</h1>
+
+        <h2>Add New Subscription</h2>
+        <form method="post">
+            <label>Select User:</label>
+            <select name="user_id" required>
+                <?php foreach ($users as $user) : ?>
+                    <option value="<?php echo esc_attr($user->ID); ?>"><?php echo esc_html($user->display_name . ' (' . $user->user_email . ')'); ?></option>
+                <?php endforeach; ?>
+            </select>
+
+            <label>Select Package:</label>
+            <select name="package" required>
+                <option value="Basic">Basic - $10/month</option>
+                <option value="Premium">Premium - $20/month</option>
+            </select>
+
+            <br><br>
+            <input type="submit" name="msm_add_subscription" class="button button-primary" value="Add Subscription">
+        </form>
+
+        <hr>
+
+        <h2>Subscription Requests</h2>
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User</th>
+                    <th>Package</th>
+                    <th>Start Date</th>
+                    <th>Expiry Date</th>
+                    <th>Approved</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($subscriptions as $sub) : 
+                $user = get_userdata($sub->user_id);
+            ?>
+                <tr>
+                    <td><?php echo esc_html($sub->id); ?></td>
+                    <td><?php echo esc_html($user ? $user->display_name : 'Unknown'); ?></td>
+                    <td><?php echo esc_html($sub->package); ?></td>
+                    <td><?php echo esc_html($sub->start_date); ?></td>
+                    <td><?php echo esc_html($sub->expiry_date); ?></td>
+                    <td><?php echo $sub->approved ? 'Yes' : 'No'; ?></td>
+                    <td>
+                        <?php if (!$sub->approved) : ?>
+                            <a href="<?php echo admin_url('admin-post.php?action=msm_approve_subscription&id=' . $sub->id); ?>" class="button">Approve</a>
+                        <?php else : ?>
+                            -
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php
+}
+
     
     // Admin page for invoices
     public function admin_invoices_page() {
@@ -204,3 +268,42 @@ new Manual_Subscription_Manager();
 register_deactivation_hook( __FILE__, function() {
     wp_clear_scheduled_hook( 'msm_daily_expiration_check' );
 } );
+
+
+// Shortcode to allow users to request subscriptions
+
+// Shortcode to display the subscription request form
+add_shortcode('subscription_form', function() {
+    if (!is_user_logged_in()) {
+        return '<p>Please <a href="' . wp_login_url() . '">log in</a> to request a subscription.</p>';
+    }
+
+    if (isset($_POST['msm_request_subscription'])) {
+        global $wpdb;
+        $user_id = get_current_user_id();
+        $package = sanitize_text_field($_POST['package']);
+        $existing = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}manual_subscriptions WHERE user_id = %d AND approved = 0", $user_id));
+
+        if ($existing) {
+            return '<p>You already have a pending subscription request.</p>';
+        }
+
+        $wpdb->insert("{$wpdb->prefix}manual_subscriptions", [
+            'user_id' => $user_id,
+            'package' => $package,
+            'approved' => 0
+        ]);
+        return '<p>Your subscription request has been sent. Please wait for admin approval.</p>';
+    }
+
+    return '
+        <form method="post">
+            <label>Select Package:</label>
+            <select name="package">
+                <option value="Basic">Basic - $10/month</option>
+                <option value="Premium">Premium - $20/month</option>
+            </select>
+            <br>
+            <input type="submit" name="msm_request_subscription" value="Request Subscription">
+        </form>';
+});
